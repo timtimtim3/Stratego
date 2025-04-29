@@ -62,6 +62,8 @@ class Piece:
             - 'S' for Spy,
             - 'B' for Bomb,
             - 'F' for Flag.
+        numeric_rank (int): The numeric rank of the piece, may not always be suitable for direct comparison, e.g.
+            spies beat 10's if attacking first, bombs are beaten by 3's.
     """
     def __init__(self, owner: int, rank: str):
         """
@@ -73,6 +75,15 @@ class Piece:
         """
         self.owner = owner  # which player this piece belongs to
         self.rank = rank    # the piece’s combat rank or special symbol
+
+        if self.rank == 'S':
+            self.numeric_rank = 1  # Spies are beaten by everything except if attacking a 10 (we handle this explicitly)
+        elif self.rank == 'F':
+            self.numeric_rank = 0  # Flag is beaten by everything
+        elif self.rank == 'B':
+            self.numeric_rank = 11  # Bomb beats everything (except 3's, we handle this explicitly)
+        else:
+            self.numeric_rank = int(self.rank)
 
 
 class Cell:
@@ -131,7 +142,8 @@ class Stratego(Game):
         """
         return 0, 1
 
-    def __init__(self, setup_p0: list[list[str]], setup_p1: list[list[str]], show_board_labels: bool = True):
+    def __init__(self, setup_p0: list[list[str]], setup_p1: list[list[str]], show_board_labels: bool = True,
+                 aggressor_advantage: bool = False):
         """
         Initialize a Stratego game instance.
 
@@ -139,8 +151,11 @@ class Stratego(Game):
             setup_p0: 4x10 grid of ranks for Player 0 (rows 6→9 on the board).
             setup_p1: 4x10 grid of ranks for Player 1 (rows 3→0, each row reversed).
             show_board_labels: Whether to print file/rank labels alongside the board.
+            aggressor_advantage: Extra tournament rule: If True, attacking pieces win if two battling pieces have
+            the same rank (e.g. '6' and '6'). If False, both pieces lose and are removed by default.
         """
         self.show_board_labels = show_board_labels
+        self.aggressor_advantage = aggressor_advantage
         self.captured = None  # Tracks a captured Flag piece, if any.
         self.first_states = {0: True, 1: True}  # To print full rules on the first view for each player.
 
@@ -530,8 +545,12 @@ class Stratego(Game):
                          "dismantle the bombs. ")
             lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
                          "the spy loses. ")
-            lines.append("For all other units the greater rank always wins (e.g. 7 beats 6), if two units with the "
-                         "same rank fight, both are removed from the game. ")
+            lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
+            if self.aggressor_advantage:
+                lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
+                             "the attacking piece wins. ")
+            else:
+                lines.append("When two units with the same rank battle, both are removed from the game. ")
             lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no"
                          "longer has any valid moves, he loses the game. ")
             lines.append("")
@@ -711,38 +730,25 @@ class Stratego(Game):
                     src_cell.piece = None
 
             # 3) Spy attack: spy kills only the Marshal ('10') when attacking
-            elif piece.rank == 'S':
-                if dst_cell.piece.rank == '10':
-                    dst_cell.piece = piece
-                elif dst_cell.piece.rank == 'S':
-                    # Spy vs. spy: both removed
-                    dst_cell.piece = None
-                    src_cell.piece = None
-                else:
-                    # Other ranks defeat spy
-                    src_cell.piece = None
+            elif piece.rank == 'S' and dst_cell.piece.rank == '10':
+                dst_cell.piece = piece
 
-            # 4) Attacking a spy: any attacker except spy defeats spy
-            elif dst_cell.piece.rank == 'S':
-                if piece.rank == 'S':
-                    # Spy vs. spy
-                    dst_cell.piece = None
-                    src_cell.piece = None
-                else:
-                    dst_cell.piece = piece
-                    src_cell.piece = None
-
-            # 5) Numeric rank comparison: higher rank wins
-            elif int(piece.rank) > int(dst_cell.piece.rank):
+            # 4) Numeric rank comparison: higher rank wins
+            elif int(piece.numeric_rank) > int(dst_cell.piece.numeric_rank):
                 dst_cell.piece = piece
                 src_cell.piece = None
-            elif int(piece.rank) < int(dst_cell.piece.rank):
+            elif int(piece.numeric_rank) < int(dst_cell.piece.numeric_rank):
                 # Attacker loses
                 src_cell.piece = None
             else:
-                # Equal ranks: both removed
-                dst_cell.piece = None
-                src_cell.piece = None
+                # Equal ranks, if aggressor_advantage game-mode is enabled, attacking piece wins, otherwise both pieces
+                # lose and are removed
+                if self.aggressor_advantage:
+                    dst_cell.piece = piece
+                    src_cell.piece = None
+                else:
+                    dst_cell.piece = None
+                    src_cell.piece = None
 
             # Record battle winner if any piece remains
             if dst_cell.piece is not None:

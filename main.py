@@ -41,7 +41,7 @@ setup_p1 = [
     ['6', '5', '4', 'B', 'F', 'B', '10', '3', 'B', '2'],
 ]
 
-game = Stratego(setup_p0, setup_p1)
+game = Stratego(setup_p0, setup_p1, aggressor_advantage=True)
 
 print(game.state(None))
 print(game.state(0))
