@@ -531,7 +531,8 @@ class Stratego(Game):
             while (cr, cc) != (dst_r, dst_c):
                 cell_mid = self.board[cr][cc]
                 if cell_mid.piece or cell_mid.is_lake:
-                    raise GameplayError(f"Path blocked for Scout move at {chr(cc + ord('a'))}{10 - cr}!')")
+                    cell_str = self._indices_to_cell((cr, cc), player_id=player_id)
+                    raise GameplayError(f"Path blocked for Scout move at {cell_str}!')")
                 cr += step_r
                 cc += step_c
 
