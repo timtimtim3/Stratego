@@ -587,28 +587,21 @@ class Stratego(Game):
         # Always print header/context
 
         if self._is_first_state(player_id):
-            pass
-
-        # Quick summary of the rules
-        lines.append("Quick summary of the rules: ")
-        lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
-                     "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
-        lines.append("A piece cannot move back and forth between the same two squares in three consecutive turns.")
-        lines.append("Only one piece can be moved on a turn.")
-        lines.append("If you move into a cell containing an enemy unit, it means you are attacking this unit.")
-        lines.append("Bombs 'B' and flags 'F' can't be moved. Bombs beat all units in a fight, except 3's who can "
-                     "dismantle the bombs. ")
-        lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
-                     "the spy loses. ")
-        lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
-        if self.aggressor_advantage:
-            lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
-                         "the attacking piece wins. ")
-        else:
-            lines.append("When two units with the same rank battle, both are removed from the game. ")
-        lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no "
-                     "longer has any valid moves, he loses the game. ")
-        lines.append("")
+            # Quick summary of the rules
+            lines.append("Quick summary of the rules: ")
+            lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
+                         "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
+            lines.append("A piece cannot move back and forth between the same two squares in three consecutive turns.")
+            lines.append("Only one piece can be moved on a turn.")
+            lines.append("If you move into a cell containing an enemy unit, it means you are attacking this unit.")
+            lines.append("Bombs 'B' and flags 'F' can't be moved. Bombs beat all units in a fight, except 3's who can "
+                         "dismantle the bombs. ")
+            lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
+                         "the spy loses. ")
+            lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
+            lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no "
+                         "longer has any valid moves, he loses the game. ")
+            lines.append("")
 
         # Explanation on move specification format
         lines.append(
@@ -626,6 +619,14 @@ class Stratego(Game):
             "If you move into a cell containing an enemy unit, it means you are attacking this unit. \n"
             "Lakes 'L' are part of the environment and cannot be moved and cannot be moved into or jumped over. "
         )
+
+        # Tournament rules
+        if self.aggressor_advantage:
+            lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
+                         "the attacking piece wins. ")
+        else:
+            lines.append("When two units with the same rank battle, both are removed from the game. ")
+
         if self._is_first_state(player_id):
             lines.append("")
 

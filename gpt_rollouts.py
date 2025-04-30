@@ -33,6 +33,8 @@ SYSTEM_PROMPT = (
     "in valid JSON with the key \"move\" and a value with the move you wish to take. "
     "Make sure that you specify a valid move string (e.g. 'b2-c3')."
 )
+explanation_assistant_moves = "Here are the previous moves you made or attempted to make: \n"
+
 
 def rollout_single(
     game_number: int,
@@ -47,7 +49,7 @@ def rollout_single(
     Write each log entry immediately to file f and optionally to console.
     """
     chat_history: Dict[str, List[dict]] = {"0": [], "1": [], "2": []}
-    game = Stratego(setup_p0, setup_p1)
+    game = Stratego(setup_p0, setup_p1, aggressor_advantage=True if game_number == 3 else False)
 
     f.write(f"########## ROLLOUT {game_number} ##########\n\n")
     if verbose:
@@ -67,28 +69,70 @@ def rollout_single(
             f"--- Game {game_number} | Player {pid}'s turn "
             f"(move {iteration+1}"
             + (f"/{max_iterations}" if max_iterations is not None else "")
-            + ") ---\n" + state_str + "\n"
+            + ") ---\n"
         )
         f.write(header + "\n")
         if verbose:
             print(header.strip())
 
-        # prepare the shared parts of the prompt
-        base_messages: List[
-            ChatCompletionSystemMessageParam
-            | ChatCompletionAssistantMessageParam
-            | ChatCompletionUserMessageParam
-        ] = [
-            ChatCompletionSystemMessageParam(role="system", content=SYSTEM_PROMPT)
-        ] + [
-            ChatCompletionAssistantMessageParam(role=m["role"], content=m["content"])
-            for m in chat_history[str(pid)]
-        ] + [
-            ChatCompletionUserMessageParam(role="user", content=state_str)
-        ]
-
         attempts = 0
         while True:
+            # gather all prior assistant messages for this player
+            assistant_history = [
+                ChatCompletionAssistantMessageParam(role=m["role"], content=m["content"])
+                for m in chat_history[str(pid)]
+            ]
+
+            # start building base_messages with the system prompt
+            base_messages: List[
+                ChatCompletionSystemMessageParam
+                | ChatCompletionAssistantMessageParam
+                | ChatCompletionUserMessageParam
+                ] = [
+                ChatCompletionSystemMessageParam(role="system", content=SYSTEM_PROMPT)
+            ]
+
+            # if they *have* made any moves before, show them:
+            if assistant_history:
+                base_messages.append(
+                    ChatCompletionUserMessageParam(
+                        role="user",
+                        content=explanation_assistant_moves
+                    )
+                )
+
+            # now replay their prior assistant turns
+            base_messages += assistant_history
+
+            # finally append the current-state prompt
+            base_messages.append(
+                ChatCompletionUserMessageParam(role="user", content=state_str)
+            )
+
+            f.write("PROMPT: \n")
+            if verbose:
+                print("PROMPT: \n")
+
+            # First, log the system prompt itself:
+            f.write(SYSTEM_PROMPT + "\n\n")
+            if verbose:
+                print(SYSTEM_PROMPT)
+                print()
+
+            if assistant_history:
+                f.write(explanation_assistant_moves + "\n")
+                if verbose:
+                    print(explanation_assistant_moves + "\n")
+
+            for m in chat_history[str(pid)]:
+                f.write(f"{m["role"]}: {m["content"]}\n")
+                if verbose:
+                    print(f"{m["role"]}: {m["content"]}\n")
+
+            f.write(state_str + "\n")
+            if verbose:
+                print(state_str + "\n")
+
             # call the API
             response = client.chat.completions.create(
                 model="gpt-4o",
@@ -98,9 +142,9 @@ def rollout_single(
             assert raw is not None, "API returned no content"
             text = raw.strip()
 
-            f.write("Response: " + text + "\n\n")
+            f.write("RESPONSE: \n" + text + "\n\n")
             if verbose:
-                print("Response: " + text)
+                print("RESPONSE: \n" + text)
 
             chat_history[str(pid)].append({"role": "assistant", "content": text})
 
@@ -112,11 +156,11 @@ def rollout_single(
 
             # try playing
             try:
-                game.play(move, pid)
-                action_entry = f"Action: {move}\n\n"
+                action_entry = f"EXTRACTED ACTION: {move}\n\n"
                 f.write(action_entry)
                 if verbose:
                     print(action_entry.strip())
+                game.play(move, pid)
                 iteration += 1
                 break  # success: exit retry loop
             except GameplayError as e:
@@ -132,7 +176,7 @@ def rollout_single(
                 # record the retry prompt
                 chat_history[str(pid)].append({
                     "role": "user",
-                    "content": f"Illegal move: {e}. Please choose another move."
+                    "content": f"Illegal move: {e}. Please choose another move. \n"
                 })
 
                 # if we've exceeded allowed attempts
@@ -163,7 +207,7 @@ def rollout_single(
 def main():
     # configure here
     n_moves_per_player = 5   # or None to play until game over
-    n_attempts_per_turn = 10  # or None for unlimited retries
+    n_attempts_per_turn = 3  # or None for unlimited retries
     n_games = 3
     verbose = True
 
@@ -178,6 +222,7 @@ def main():
                 verbose=verbose
             )
         print(f"Saved rollout {i} to {fname}\n")
+
 
 if __name__ == "__main__":
     main()
