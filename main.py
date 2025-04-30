@@ -43,10 +43,6 @@ setup_p1 = [
 
 game = Stratego(setup_p0, setup_p1, aggressor_advantage=True)
 
-print(game.state(None))
-print(game.state(0))
-print(game.state(1))
-
 while True:
     player_id = game.whose_turn()
     state = game.state(player_id)

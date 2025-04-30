@@ -2,6 +2,7 @@ import itertools
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
+from typing import TypedDict, Optional, Tuple, cast
 
 
 class GameplayError(Exception):
@@ -49,6 +50,17 @@ class Game(ABC):
     provided to the model in the state function. If the move is invalid, throw a GameplayError. 
     The error should describe why the move is invalid.
     '''
+
+
+class MoveInfo(TypedDict):
+    player_id: int
+    src: Tuple[int, int]
+    dst: Tuple[int, int]
+    src_rank: str
+    dst_rank: Optional[str]
+    winner: Optional[int]
+    winning_rank: Optional[str]
+    losing_rank: Optional[str]
 
 
 class Piece:
@@ -132,8 +144,10 @@ class Stratego(Game):
     captured: Piece | None
     last_move: dict[int, tuple[tuple[int, int], tuple[int, int]] | None]
     bounce_count: dict[int, int]
-    move_history_queue: list[dict]
+    move_info_queue: list[MoveInfo]
     board_state_queues: dict[int | None, list[list[str]]]
+    removed_pieces: dict[int, list[str]]
+    move_histories: dict[int, list[str]]
 
     @property
     def valid_players(self) -> tuple[int, ...]:
@@ -143,7 +157,8 @@ class Stratego(Game):
         return 0, 1
 
     def __init__(self, setup_p0: list[list[str]], setup_p1: list[list[str]], show_board_labels: bool = True,
-                 aggressor_advantage: bool = False):
+                 aggressor_advantage: bool = False, flip_board: bool = False, show_player_labels: bool = True,
+                 display_removed_pieces: bool = True, display_past_moves: bool = True):
         """
         Initialize a Stratego game instance.
 
@@ -153,11 +168,22 @@ class Stratego(Game):
             show_board_labels: Whether to print file/rank labels alongside the board.
             aggressor_advantage: Extra tournament rule: If True, attacking pieces win if two battling pieces have
             the same rank (e.g. '6' and '6'). If False, both pieces lose and are removed by default.
+            flip_board: Whether to flip the board state representation for player 1 so both players view
+            the board with their own pieces at the bottom. If False, we always return the internal board perspective.
+            show_player_labels: Whether to show 'Player 0' and 'Player 1' labels at the corresponding sides of the
+            board state string.
+            display_removed_pieces: Whether to display the captured/removed pieces of each player in the state.
+            display_past_moves: Whether to display past moves of each player in the state.
         """
         self.show_board_labels = show_board_labels
         self.aggressor_advantage = aggressor_advantage
+        self.flip_board = flip_board
+        self.show_player_labels = show_player_labels
+        self.display_removed_pieces = display_removed_pieces
+        self.display_past_moves = display_past_moves
         self.captured = None  # Tracks a captured Flag piece, if any.
         self.first_states = {0: True, 1: True}  # To print full rules on the first view for each player.
+        self.removed_pieces = {0: [], 1: []}  # Keep track which pieces were removed for each player
 
         # Create empty 10x10 board and mark the 8 lake cells
         self.board = [[Cell() for _ in range(10)] for _ in range(10)]
@@ -170,8 +196,9 @@ class Stratego(Game):
         self.bounce_count = {0: 0, 1: 0}
 
         # Queues to build history and board-state diffs for generating state strings
-        self.move_history_queue: list[dict] = []
+        self.move_info_queue: list[dict] = []
         self.board_state_queues = {0: [], 1: [], None: []}
+        self.move_histories = {0: [], 1: []}
 
         self._current_player = 0
 
@@ -229,8 +256,7 @@ class Stratego(Game):
                 # Assuming cell.piece is None beforehand
                 cell.piece = Piece(owner=player_id, rank=rank)
 
-    @staticmethod
-    def _cell_to_indices(cell: str, player_id: int) -> tuple[int, int]:
+    def _cell_to_indices(self, cell: str, player_id: int) -> tuple[int, int]:
         """
         Convert cell notation like 'b2' into board indices (row, col).
         Adjusts for Player 1 perspective by rotating 180°.
@@ -250,20 +276,19 @@ class Stratego(Game):
         row = 10 - int(row_str)
 
         # Rotate for player 1
-        if player_id == 1:
+        if self.flip_board and player_id == 1:
             row = 9 - row
             col = 9 - col
         return row, col
 
-    @staticmethod
-    def _indices_to_cell(indices: tuple[int, int], player_id: int | None) -> str:
+    def _indices_to_cell(self, indices: tuple[int, int], player_id: int | None) -> str:
         """
         Convert board indices (row, col) to cell notation like 'b2'.
         Rotates indices for Player 1's perspective if needed.
         """
         r, c = indices
         # rotate for player 1
-        if player_id == 1:
+        if self.flip_board and player_id == 1:
             r = 9 - r
             c = 9 - c
         # file letter a–j
@@ -274,11 +299,14 @@ class Stratego(Game):
 
     def _oriented_board(self, player_id: int | None):
         """
-        Returns the board matrix oriented to the given player's view.
+        Returns the board matrix oriented to the given player's view if self.flip_board is True.
         Player 1's view is a 180° rotation of the internal board.
         If player_id is None, orients the board according to the current player.
+        If self.flip_board is False, we return the internal board perspective.
         """
-        if player_id == 0 or (player_id is None and self._current_player == 0):
+        if not self.flip_board:
+            return self.board
+        elif player_id == 0 or (player_id is None and self._current_player == 0):
             return self.board
         elif player_id == 1 or (player_id is None and self._current_player == 1):
             rotated_board = [list(reversed(row)) for row in reversed(self.board)]
@@ -341,6 +369,22 @@ class Stratego(Game):
         Hides enemy pieces as '?' and shows lakes, empty, and own ranks appropriately.
         """
         lines = []
+
+        # Define player labels
+        if not self.flip_board:
+            top_player, bottom_player = 1, 0
+        else:
+            # If flip_board is True, current player is always on the bottom
+            if player_id is None or player_id == 0:
+                top_player, bottom_player = 1, 0
+            else:
+                top_player, bottom_player = 0, 1
+
+        # Add top player label
+        padding = " " * 15 if self.show_board_labels else " " * 10
+        if self.show_player_labels:
+            lines.append(padding + f"Player {top_player}")
+
         # Column labels and vertical gap if requested
         if show_board_labels:
             indent = " " * 6
@@ -350,6 +394,7 @@ class Stratego(Game):
 
         # Oriented board rows
         board = self._oriented_board(player_id)
+
         for idx, row in enumerate(board):
             prefix = ""
             if show_board_labels:
@@ -371,9 +416,13 @@ class Stratego(Game):
                 cell_strs.append(sym.ljust(2))
             line = prefix + (' ' if prefix else '') + ' '.join(cell_strs)
             lines.append(line)
+
+        # Add bottom player label
+        if self.show_player_labels:
+            lines.append(padding + f"Player {bottom_player}")
         return lines
 
-    def _get_move_history_summaries(self, player_id: int | None = 0):
+    def _get_move_info_summaries(self, player_id: int | None = 0):
         """
         Generate textual summaries of the last two moves from the perspective of player_id.
 
@@ -384,36 +433,36 @@ class Stratego(Game):
             A tuple (own_summary, opponent_summary), where each summary is a list of lines or None if unavailable.
         """
         # No moves yet: nothing to summarize
-        if len(self.move_history_queue) == 0:
+        if len(self.move_info_queue) == 0:
             return None, None
 
         # Only one move exists: determine whose move it is
-        elif len(self.move_history_queue) == 1:
+        elif len(self.move_info_queue) == 1:
             if player_id in (0, None):
                 # show own move for player 0 or global view
                 opponent_move_info = None
-                own_previous_info = self.move_history_queue[0]
+                own_previous_info = self.move_info_queue[0]
             else:
                 # show opponent's move for player 1 perspective
-                opponent_move_info = self.move_history_queue[0]
+                opponent_move_info = self.move_info_queue[0]
                 own_previous_info = None
         else:
             # Two or more moves: first is your own last, second is opponent last
-            own_previous_info = self.move_history_queue[0]
-            opponent_move_info = self.move_history_queue[1]
+            own_previous_info = self.move_info_queue[0]
+            opponent_move_info = self.move_info_queue[1]
 
         # Convert raw move info dicts into human-readable string lists
         previous_move_summary = (
             None if own_previous_info is None
-            else self._parse_move_history(own_previous_info, player_id)
+            else self._parse_move_info(own_previous_info, player_id)
         )
         opponent_move_summary = (
             None if opponent_move_info is None
-            else self._parse_move_history(opponent_move_info, player_id)
+            else self._parse_move_info(opponent_move_info, player_id)
         )
         return previous_move_summary, opponent_move_summary
 
-    def _parse_move_history(self, move_info: dict, player_id: int | None = 0) -> list[str]:
+    def _parse_move_info(self, move_info: MoveInfo, player_id: int | None = 0) -> list[str]:
         """
         Translate a single move_info dict into a list of narrative lines.
 
@@ -460,21 +509,24 @@ class Stratego(Game):
             # Determine and narrate the battle result
             if move_info['winner'] is None:
                 summary.append("Since both pieces are of the same rank, both were removed from the board. ")
-            elif player_id is None:
-                win_rank = move_info['winning_rank']
-                loser = 1 - move_info['winner']
-                summary.append(f"Since Player {move_info['winner']}'s {win_rank} beats Player {loser}'s unit, Player "
-                               f"{loser}'s unit was removed from the board. ")
-            elif move_info['winner'] == player_id:
-                # You won the fight
-                win_piece = atk_rank if owner == player_id else def_rank
-                summary.append(f"Since your {win_piece} beats the opponent's {win_piece}, the opponent's unit "
-                               f"was removed. ")
             else:
-                # Opponent won
-                win_piece = def_rank if owner == player_id else atk_rank
-                summary.append(f"Since the opponent's {win_piece} beats your unit, your unit was removed from the "
-                               f"board. ")
+                win_rank, lose_rank = move_info['winning_rank'], move_info['losing_rank']
+                winner, loser = move_info['winner'], 1 - move_info['winner']
+
+                add_reason = " (due to the aggressor advantage rule)" if (self.aggressor_advantage and win_rank ==
+                                                                          lose_rank) else ""
+
+                if player_id is None:
+                    summary.append(f"Since Player {winner}'s {win_rank} beats Player {loser}'s {lose_rank}"
+                                   f"{add_reason}, Player {loser}'s {lose_rank} was removed from the board. ")
+                elif move_info['winner'] == player_id:
+                    # You won the fight
+                    summary.append(f"Since your {win_rank} beats your opponent's {lose_rank}{add_reason}, the "
+                                   f"opponent's {lose_rank} was removed from the board. ")
+                else:
+                    # Opponent won
+                    summary.append(f"Since your opponent's {win_rank} beats your {lose_rank}{add_reason}, your "
+                                   f"{lose_rank} was removed from the board. ")
 
         # Always append the resulting board prompt
         summary.append("The resulting board from this turn was: ")
@@ -535,26 +587,30 @@ class Stratego(Game):
         # Always print header/context
 
         if self._is_first_state(player_id):
-            lines.append("Quick summary of the rules: ")
-            lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
-                         "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
-            lines.append("A piece cannot move back and forth between the same two squares in three consecutive turns.")
-            lines.append("Only one piece can be moved on a turn.")
-            lines.append("If you move into a cell containing an enemy unit, it means you are attacking this unit.")
-            lines.append("Bombs 'B' and flags 'F' can't be moved. Bombs beat all units in a fight, except 3's who can "
-                         "dismantle the bombs. ")
-            lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
-                         "the spy loses. ")
-            lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
-            if self.aggressor_advantage:
-                lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
-                             "the attacking piece wins. ")
-            else:
-                lines.append("When two units with the same rank battle, both are removed from the game. ")
-            lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no"
-                         "longer has any valid moves, he loses the game. ")
-            lines.append("")
+            pass
 
+        # Quick summary of the rules
+        lines.append("Quick summary of the rules: ")
+        lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
+                     "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
+        lines.append("A piece cannot move back and forth between the same two squares in three consecutive turns.")
+        lines.append("Only one piece can be moved on a turn.")
+        lines.append("If you move into a cell containing an enemy unit, it means you are attacking this unit.")
+        lines.append("Bombs 'B' and flags 'F' can't be moved. Bombs beat all units in a fight, except 3's who can "
+                     "dismantle the bombs. ")
+        lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
+                     "the spy loses. ")
+        lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
+        if self.aggressor_advantage:
+            lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
+                         "the attacking piece wins. ")
+        else:
+            lines.append("When two units with the same rank battle, both are removed from the game. ")
+        lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no "
+                     "longer has any valid moves, he loses the game. ")
+        lines.append("")
+
+        # Explanation on move specification format
         lines.append(
             "Cells are represented by file/columns (a–j) and rank/rows (1–10) and may contain "
             "'.' empty, 'L' lake, 'B' bomb, 'F' flag, numbers '1-10' for units of that rank, "
@@ -578,10 +634,14 @@ class Stratego(Game):
             current_board = self.board_state_queues[player_id][1]
         previous_board = self.board_state_queues[player_id][0]
 
-        previous_move_summary, opponent_move_summary = self._get_move_history_summaries(player_id)
+        previous_move_summary, opponent_move_summary = self._get_move_info_summaries(player_id)
 
         if previous_move_summary is not None:
             lines.extend(previous_move_summary)
+        elif player_id == 0:
+            lines.append("Here is the state of the board: \n")
+        else:
+            lines.append("Here is the previous state of the board: \n")
 
         lines.extend(previous_board)
 
@@ -590,6 +650,29 @@ class Stratego(Game):
 
         if current_board is not None:
             lines.extend(current_board)
+
+        # show which pieces have been removed so far**
+        if self.display_removed_pieces:
+            # join the rank symbols with commas, or show “None”
+            p0_removed = ", ".join(f"'{r}'" for r in self.removed_pieces[0]) or "None"
+            p1_removed = ", ".join(f"'{r}'" for r in self.removed_pieces[1]) or "None"
+
+            lines.append("")  # blank spacer
+            lines.append(f"Here is a list of the ranks of the pieces Player {0} has lost so far over the course of the "
+                         f"game: {p0_removed}")
+            lines.append(f"Here is a list of the ranks of the pieces Player {1} has lost so far over the course of the "
+                         f"game: {p1_removed}")
+
+        # display the past moves of each player
+        if self.display_past_moves:
+            p0_moves = ", ".join(f"'{m}'" for m in self.move_histories[0]) or "None"
+            p1_moves = ", ".join(f"'{m}'" for m in self.move_histories[1]) or "None"
+
+            lines.append("")  # blank spacer
+            lines.append(f"Here is a list of the past moves that Player {0} has made so far over the course of the "
+                         f"game: {p0_moves}")
+            lines.append(f"Here is a list of the past moves that Player {1} has made so far over the course of the "
+                         f"game: {p1_moves}")
 
         done = self.is_over()
         if done:
@@ -697,7 +780,7 @@ class Stratego(Game):
         self.last_move[player_id] = current
 
         # Prepare a history record for this move
-        move_history = {
+        move_info: MoveInfo = {
             'player_id': player_id,
             'src': (src_r, src_c),
             'dst': (dst_r, dst_c),
@@ -705,6 +788,7 @@ class Stratego(Game):
             'dst_rank': None if dst_cell.piece is None else dst_cell.piece.rank,
             'winner': None,
             'winning_rank': None,
+            'losing_rank': None
         }
 
         # Execute move or resolve battle
@@ -752,13 +836,35 @@ class Stratego(Game):
 
             # Record battle winner if any piece remains
             if dst_cell.piece is not None:
-                move_history['winner'] = player_id if dst_cell.piece.owner == player_id else 1 - player_id
-                move_history['winning_rank'] = dst_cell.piece.rank
+                move_info['winner'] = player_id if dst_cell.piece.owner == player_id else 1 - player_id
+                move_info['winning_rank'] = dst_cell.piece.rank
 
-        # Maintain only last two moves in history
-        if len(self.move_history_queue) >= 2:
-            self.move_history_queue = self.move_history_queue[-1:]
-        self.move_history_queue.append(move_history)
+                atk_rank = move_info['src_rank']
+                def_rank = move_info['dst_rank']
+
+                # The attacker won
+                if move_info['winner'] == player_id:
+                    move_info['losing_rank'] = def_rank
+                else:
+                    # The defender won
+                    move_info['losing_rank'] = atk_rank
+
+                loser = 1 - cast(int, move_info['winner'])
+                if move_info['losing_rank'] is not None:
+                    self.removed_pieces[loser].append(move_info['losing_rank'])
+            else:
+                # If no pieces remain, we need to record the loss for both players in removed_pieces
+                # since this only happens for units of the same rank, we can append either src_rank or dst_rank
+                self.removed_pieces[0].append(move_info['src_rank'])
+                self.removed_pieces[1].append(move_info['src_rank'])
+
+        # Append move to history
+        self.move_histories[player_id].append(move)
+
+        # Maintain only last two move infos in info queue
+        if len(self.move_info_queue) >= 2:
+            self.move_info_queue = self.move_info_queue[-1:]
+        self.move_info_queue.append(move_info)
 
         # Switch turn to the other player
         self._current_player = 1 - self._current_player

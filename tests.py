@@ -29,10 +29,10 @@ def test_end_to_end_flag_capture():
     game.play('e4-e5', 0)
     assert game.whose_turn() == 1, "Turn should switch to Player 1"
 
-    game.play('j4-j5', 1)
+    game.play('a7-a6', 1)
     assert game.whose_turn() == 0, "Turn should switch back to Player 0"
 
-    # Player 0 captures the flag by moving scout from a6 to a8
+    # Player 0 captures the flag by moving scout to enemy flag
     game.play('j4-j7', 0)
     # After capturing flag, game should end
     assert game.is_over(), "Game should be over after flag capture"
