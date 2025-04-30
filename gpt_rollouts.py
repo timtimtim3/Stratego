@@ -64,7 +64,6 @@ def rollout_single(
             break
 
         pid = game.whose_turn()
-        state_str = game.state(pid)
         header = (
             f"--- Game {game_number} | Player {pid}'s turn "
             f"(move {iteration+1}"
@@ -77,6 +76,8 @@ def rollout_single(
 
         attempts = 0
         while True:
+            state_str = game.state(pid)
+
             # gather all prior assistant messages for this player
             assistant_history = [
                 ChatCompletionAssistantMessageParam(role=m["role"], content=m["content"])

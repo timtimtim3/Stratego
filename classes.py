@@ -583,11 +583,12 @@ class Stratego(Game):
         the current player's previous move, as well as the current board that resulted from the opponent's previous
         move.
         """
-        lines: list[str] = ["Stratego — the goal is to capture the enemy Flag.", ""]
+        lines: list[str] = ["Stratego — the goal is to capture the enemy Flag."]
         # Always print header/context
 
         if self._is_first_state(player_id):
             # Quick summary of the rules
+            lines.append("")
             lines.append("Quick summary of the rules: ")
             lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
                          "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
@@ -601,33 +602,30 @@ class Stratego(Game):
             lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
             lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no "
                          "longer has any valid moves, he loses the game. ")
+            # Tournament rules
+            if self.aggressor_advantage:
+                lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
+                             "the attacking piece wins. ")
+            else:
+                lines.append("When two units with the same rank battle, both are removed from the game. ")
             lines.append("")
 
-        # Explanation on move specification format
-        lines.append(
-            "Cells are represented by file/columns (a–j) and rank/rows (1–10) and may contain "
-            "'.' empty, 'L' lake, 'B' bomb, 'F' flag, numbers '1-10' for units of that rank, "
-            "'S' for spy, and '?' for hidden enemy piece."
-        )
-        lines.append(
-            "Specify your move in the form 'cell_to_move_from-cell_to_move_to'. "
-            "For example: 'b2-c3', meaning move the unit in cell b2 to c3. \n"
-            "Note how scout moves can span across multiple cells (e.g. 'b2-b5') as long as there are no lakes "
-            "or other units in the intermediate cells (in 'b3' and 'b4' in the example). \n"
-            "You can only move into cells that are empty '.' or are occupied by an enemy unit '?'. \n"
-            "You cannot move your own unit onto a cell that contains another one of your own units. "
-            "If you move into a cell containing an enemy unit, it means you are attacking this unit. \n"
-            "Lakes 'L' are part of the environment and cannot be moved and cannot be moved into or jumped over. "
-        )
-
-        # Tournament rules
-        if self.aggressor_advantage:
-            lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
-                         "the attacking piece wins. ")
-        else:
-            lines.append("When two units with the same rank battle, both are removed from the game. ")
-
-        if self._is_first_state(player_id):
+            # Explanation on move specification format
+            lines.append(
+                "Cells are represented by file/columns (a–j) and rank/rows (1–10) and may contain "
+                "'.' empty, 'L' lake, 'B' bomb, 'F' flag, numbers '1-10' for units of that rank, "
+                "'S' for spy, and '?' for hidden enemy piece."
+            )
+            lines.append(
+                "Specify your move in the form 'cell_to_move_from-cell_to_move_to'. "
+                "For example: 'b2-c3', meaning move the unit in cell b2 to c3. \n"
+                "Note how scout moves can span across multiple cells (e.g. 'b2-b5') as long as there are no lakes "
+                "or other units in the intermediate cells (in 'b3' and 'b4' in the example). \n"
+                "You can only move into cells that are empty '.' or are occupied by an enemy unit '?'. \n"
+                "You cannot move your own unit onto a cell that contains another one of your own units. "
+                "If you move into a cell containing an enemy unit, it means you are attacking this unit. \n"
+                "Lakes 'L' are part of the environment and cannot be moved and cannot be moved into or jumped over. "
+            )
             lines.append("")
 
         current_board = None
@@ -715,6 +713,8 @@ class Stratego(Game):
         Raises GameplayError on invalid moves or rule violations.
         Raises RuntimeError if a terminal move ends the game.
         """
+        self.first_states[player_id] = False
+
         # Parse move string
         try:
             src_str, dst_str = move.split('-')
@@ -869,7 +869,6 @@ class Stratego(Game):
 
         # Switch turn to the other player
         self._current_player = 1 - self._current_player
-        self.first_states[player_id] = False
 
         # Update board snapshots for each perspective
         for pid in (0, 1, None):
