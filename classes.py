@@ -618,7 +618,7 @@ class Stratego(Game):
             )
             lines.append(
                 "Specify your move in the form 'cell_to_move_from-cell_to_move_to'. "
-                "For example: 'b2-c3', meaning move the unit in cell b2 to c3. \n"
+                "For example: 'b2-b3', meaning move the unit in cell b2 to b3. \n"
                 "Note how scout moves can span across multiple cells (e.g. 'b2-b5') as long as there are no lakes "
                 "or other units in the intermediate cells (in 'b3' and 'b4' in the example). \n"
                 "You can only move into cells that are empty '.' or are occupied by an enemy unit '?'. \n"
