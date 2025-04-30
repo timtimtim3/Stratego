@@ -1,5 +1,4 @@
-from classes import Stratego
-
+from classes import Stratego, GameplayError
 
 setup_p0 = [
     ['6', 'S', '10', '9', '8', '8', '7', '7', '7', '2'],
@@ -16,10 +15,10 @@ setup_p1 = [
 
 setup_p0 = [
     # front-line (row 4 of the board)
-    ['2', '2', '7', '8', '6', '2', '9', '7', '2', '6'],
+    ['2', '2', '7', '8', '3', '10', '9', '7', '2', '6'],
 
     # row 3
-    ['3', '3', '10', '4', '8', '5', 'S', '4', '7', '2'],
+    ['3', '2', '6', '4', '8', '5', 'S', '4', '7', '2'],
 
     # row 2
     ['B', '3', '4', '3', '2', 'B', '5', '6', '5', 'B'],
@@ -43,9 +42,16 @@ setup_p1 = [
 
 game = Stratego(setup_p0, setup_p1, aggressor_advantage=True)
 
+mistake = {0: False, 1: False}
 while True:
     player_id = game.whose_turn()
-    state = game.state(player_id)
-    print(state)
+    if not mistake[player_id]:
+        state = game.state(player_id)
+        print(state)
     move = input("Move for Player {}: \n".format(player_id))
-    game.play(move, player_id)
+    try:
+        game.play(move, player_id)
+        mistake[player_id] = False
+    except GameplayError as e:
+        mistake[player_id] = True
+        print(e)
