@@ -53,6 +53,9 @@ class Game(ABC):
 
 
 class MoveInfo(TypedDict):
+    """
+    Used for summarizing detailed information about the past two moves
+    """
     player_id: int
     src: Tuple[int, int]
     dst: Tuple[int, int]
@@ -61,6 +64,23 @@ class MoveInfo(TypedDict):
     winner: Optional[int]
     winning_rank: Optional[str]
     losing_rank: Optional[str]
+
+
+class RemovedHistory(TypedDict):
+    """
+    Used for tracking and displaying all past battle resolutions
+    """
+    turn: int
+    lost_rank: Optional[str]
+    by_rank: Optional[str]
+
+
+class MoveHistory(TypedDict):
+    """
+    Used for tracking and displaying all past player moves
+    """
+    turn: int
+    move: str
 
 
 class Piece:
@@ -77,6 +97,7 @@ class Piece:
         numeric_rank (int): The numeric rank of the piece, may not always be suitable for direct comparison, e.g.
             spies beat 10's if attacking first, bombs are beaten by 3's.
     """
+
     def __init__(self, owner: int, rank: str):
         """
         Initialize a Stratego piece.
@@ -86,7 +107,7 @@ class Piece:
             rank (str): Rank symbol as described above.
         """
         self.owner = owner  # which player this piece belongs to
-        self.rank = rank    # the piece’s combat rank or special symbol
+        self.rank = rank  # the piece’s combat rank or special symbol
 
         if self.rank == 'S':
             self.numeric_rank = 1  # Spies are beaten by everything except if attacking a 10 (we handle this explicitly)
@@ -106,6 +127,7 @@ class Cell:
         is_lake (bool): True if this cell is an impassable lake.
         piece (Piece | None): The piece occupying this cell, or None if empty.
     """
+
     def __init__(self, is_lake: bool = False, piece: Piece | None = None):
         """
         Initialize a board cell.
@@ -146,8 +168,8 @@ class Stratego(Game):
     bounce_count: dict[int, int]
     move_info_queue: list[MoveInfo]
     board_state_queues: dict[int | None, list[list[str]]]
-    removed_pieces: dict[int, list[str]]
-    move_histories: dict[int, list[str]]
+    removed_pieces: dict[int, list[RemovedHistory]]
+    move_histories: dict[int, list[MoveHistory]]
 
     @property
     def valid_players(self) -> tuple[int, ...]:
@@ -184,6 +206,7 @@ class Stratego(Game):
         self.captured = None  # Tracks a captured Flag piece, if any.
         self.first_states = {0: True, 1: True}  # To print full rules on the first view for each player.
         self.removed_pieces = {0: [], 1: []}  # Keep track which pieces were removed for each player
+        self.turn_counter = 1
 
         # Create empty 10x10 board and mark the 8 lake cells
         self.board = [[Cell() for _ in range(10)] for _ in range(10)]
@@ -498,7 +521,7 @@ class Stratego(Game):
             def_rank = move_info['dst_rank']
             if player_id is None:
                 summary.append(f"In the previous turn, Player {owner} moved his {atk_rank} from {src_cell} to "
-                               f"{dst_cell}, attacking Player {1-owner}'s {def_rank} in that cell. ")
+                               f"{dst_cell}, attacking Player {1 - owner}'s {def_rank} in that cell. ")
             elif owner == player_id:
                 summary.append(f"In your previous turn, you moved your {atk_rank} from {src_cell} to {dst_cell}, "
                                f"attacking the opponent's {def_rank} in that cell. ")
@@ -587,46 +610,7 @@ class Stratego(Game):
         # Always print header/context
 
         if self._is_first_state(player_id):
-            # Quick summary of the rules
-            lines.append("")
-            lines.append("Quick summary of the rules: ")
-            lines.append("Units can move one tile in each of the cardinal directions. Scouts represented as '2' "
-                         "can move multiple tiles as long as there are no lakes or units in the intermediate tiles. ")
-            lines.append("A piece cannot move back and forth between the same two squares in three consecutive turns.")
-            lines.append("Only one piece can be moved on a turn.")
-            lines.append("If you move into a cell containing an enemy unit, it means you are attacking this unit.")
-            lines.append("Bombs 'B' and flags 'F' can't be moved. Bombs beat all units in a fight, except 3's who can "
-                         "dismantle the bombs. ")
-            lines.append("Spies 'S' can beat the strongest unit 10 if they attack the 10. If the 10 attacks the spy, "
-                         "the spy loses. ")
-            lines.append("For all other units the greater rank always wins (e.g. 7 beats 6).")
-            lines.append("The player who captures the opponent's Flag 'F' wins the game. If a player at any moment no "
-                         "longer has any valid moves, he loses the game. ")
-            # Tournament rules
-            if self.aggressor_advantage:
-                lines.append("Since the Aggressor Advantage rule is enabled, when two units with the same rank battle, "
-                             "the attacking piece wins. ")
-            else:
-                lines.append("When two units with the same rank battle, both are removed from the game. ")
-            lines.append("")
-
-            # Explanation on move specification format
-            lines.append(
-                "Cells are represented by file/columns (a–j) and rank/rows (1–10) and may contain "
-                "'.' empty, 'L' lake, 'B' bomb, 'F' flag, numbers '1-10' for units of that rank, "
-                "'S' for spy, and '?' for hidden enemy piece."
-            )
-            lines.append(
-                "Specify your move in the form 'cell_to_move_from-cell_to_move_to'. "
-                "For example: 'b2-b3', meaning move the unit in cell b2 to b3. \n"
-                "Note how scout moves can span across multiple cells (e.g. 'b2-b5') as long as there are no lakes "
-                "or other units in the intermediate cells (in 'b3' and 'b4' in the example). \n"
-                "You can only move into cells that are empty '.' or are occupied by an enemy unit '?'. \n"
-                "You cannot move your own unit onto a cell that contains another one of your own units. "
-                "If you move into a cell containing an enemy unit, it means you are attacking this unit. \n"
-                "Lakes 'L' are part of the environment and cannot be moved and cannot be moved into or jumped over. "
-            )
-            lines.append("")
+            pass
 
         current_board = None
         if len(self.board_state_queues[player_id]) == 2:
@@ -650,28 +634,58 @@ class Stratego(Game):
         if current_board is not None:
             lines.extend(current_board)
 
-        # show which pieces have been removed so far**
-        if self.display_removed_pieces:
-            # join the rank symbols with commas, or show “None”
-            p0_removed = ", ".join(f"'{r}'" for r in self.removed_pieces[0]) or "None"
-            p1_removed = ", ".join(f"'{r}'" for r in self.removed_pieces[1]) or "None"
-
-            lines.append("")  # blank spacer
-            lines.append(f"Here is a list of the ranks of the pieces Player {0} has lost so far over the course of the "
-                         f"game: {p0_removed}")
-            lines.append(f"Here is a list of the ranks of the pieces Player {1} has lost so far over the course of the "
-                         f"game: {p1_removed}")
-
-        # display the past moves of each player
+        # Display a combined, chronological list of moves and removals
         if self.display_past_moves:
-            p0_moves = ", ".join(f"'{m}'" for m in self.move_histories[0]) or "None"
-            p1_moves = ", ".join(f"'{m}'" for m in self.move_histories[1]) or "None"
+            # Build a unified list of (turn, description) tuples
+            events: list[tuple[int, str]] = []
 
-            lines.append("")  # blank spacer
-            lines.append(f"Here is a list of the past moves that Player {0} has made so far over the course of the "
-                         f"game: {p0_moves}")
-            lines.append(f"Here is a list of the past moves that Player {1} has made so far over the course of the "
-                         f"game: {p1_moves}")
+            # 1) Moves
+            for mh in self.move_histories[0]:
+                t = mh["turn"]
+                mv = mh["move"]
+                events.append((
+                    t,
+                    f"Player 0 played the move '{mv}' in turn {t}."
+                ))
+            for mh in self.move_histories[1]:
+                t = mh["turn"]
+                mv = mh["move"]
+                events.append((
+                    t,
+                    f"Player 1 played the move '{mv}' in turn {t}."
+                ))
+
+            # 2) Removals
+            for info in self.removed_pieces[0]:
+                t = info["turn"]
+                lost = info["lost_rank"] or "unknown"
+                by = info["by_rank"] or "unknown"
+                events.append((
+                    t,
+                    f"This move resulted in a battle; Piece {lost} of Player 0 was removed by Piece {by} of Player 1 "
+                    f"in turn {t}."
+                ))
+            for info in self.removed_pieces[1]:
+                t = info["turn"]
+                lost = info["lost_rank"] or "unknown"
+                by = info["by_rank"] or "unknown"
+                events.append((
+                    t,
+                    f"This move resulted in a battle; Piece {lost} of Player 1 was removed by Piece {by} of Player 0 "
+                    f"in turn {t}."
+                ))
+
+            # Only if we actually have any events, print the header and bullets
+            if events:
+                lines.append("")  # spacer
+                lines.append("Here's a chronological list of all past moves and battle resolutions so far in the game:")
+
+                # Sort by turn (moves first, then removals)
+                events.sort(key=lambda e: (e[0], 0 if "played the move" in e[1] else 1))
+
+                # Emit each event as a bullet
+                for _, desc in events:
+                    lines.append(f"- {desc}")
 
         done = self.is_over()
         if done:
@@ -852,15 +866,19 @@ class Stratego(Game):
 
                 loser = 1 - cast(int, move_info['winner'])
                 if move_info['losing_rank'] is not None:
-                    self.removed_pieces[loser].append(move_info['losing_rank'])
+                    removed_info = RemovedHistory(turn=self.turn_counter, lost_rank=move_info['losing_rank'],
+                                                  by_rank=move_info['winning_rank'])
+                    self.removed_pieces[loser].append(removed_info)
             else:
                 # If no pieces remain, we need to record the loss for both players in removed_pieces
                 # since this only happens for units of the same rank, we can append either src_rank or dst_rank
-                self.removed_pieces[0].append(move_info['src_rank'])
-                self.removed_pieces[1].append(move_info['src_rank'])
+                removed_info = RemovedHistory(turn=self.turn_counter, lost_rank=move_info['src_rank'],
+                                              by_rank=move_info['src_rank'])
+                self.removed_pieces[0].append(removed_info)
+                self.removed_pieces[1].append(removed_info)
 
         # Append move to history
-        self.move_histories[player_id].append(move)
+        self.move_histories[player_id].append(MoveHistory(turn=self.turn_counter, move=move))
 
         # Maintain only last two move infos in info queue
         if len(self.move_info_queue) >= 2:
@@ -869,6 +887,7 @@ class Stratego(Game):
 
         # Switch turn to the other player
         self._current_player = 1 - self._current_player
+        self.turn_counter += 1
 
         # Update board snapshots for each perspective
         for pid in (0, 1, None):

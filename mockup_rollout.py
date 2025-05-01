@@ -59,39 +59,36 @@ def rollout_single(game_number: int) -> List[str]:
         header = f"--- Game {game_number} | Player {pid}'s turn ---\n{state_str}\n"
 
         # build a *typed* list of messages
-        messages: List[
-            ChatCompletionSystemMessageParam
-            | ChatCompletionAssistantMessageParam
-            | ChatCompletionUserMessageParam
-        ] = [
-            ChatCompletionSystemMessageParam(
-                role="system",
-                content=SYSTEM_PROMPT,
-            )
-        ]
+        messages: List[ChatCompletionSystemMessageParam | ChatCompletionAssistantMessageParam
+                       | ChatCompletionUserMessageParam] = [ChatCompletionSystemMessageParam(role="system",
+                                                                                             content=SYSTEM_PROMPT)]
 
         # replay prior assistant messages
-        messages += [
-            ChatCompletionAssistantMessageParam(
-                role=m["role"],       # should be "assistant"
-                content=m["content"],
-            )
-            for m in chat_history[str(pid)]
-        ]
+        messages += [ChatCompletionAssistantMessageParam(role=m["role"], content=m["content"])
+                     for m in chat_history[str(pid)]]
+
+        # # Replay every turn (both user and assistant) in the order they happened
+        # for turn in chat_history[str(pid)]:
+        #     if turn["role"] == "user":
+        #         messages.append(ChatCompletionUserMessageParam(
+        #             role="user",
+        #             content=turn["content"]
+        #         ))
+        #     else:  # "assistant"
+        #         messages.append(ChatCompletionAssistantMessageParam(
+        #             role="assistant",
+        #             content=turn["content"]
+        #         ))
 
         # append the new user prompt
-        messages.append(
-            ChatCompletionUserMessageParam(
-                role="user",
-                content=state_str,
-            )
-        )
+        messages.append(ChatCompletionUserMessageParam(role="user", content=state_str))
 
         # make the sync call (no await)
         text = f'{{"move": "{moves[i]}"}}'
         i += 1
 
         # record assistant reply
+        # chat_history[str(pid)].append({"role": "user", "content": your_state_prompt})
         chat_history[str(pid)].append({"role": "assistant", "content": text})
         game_log.append(header + "Response: " + text + "\n")
 

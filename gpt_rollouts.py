@@ -28,10 +28,25 @@ setup_p1 = [
 
 SYSTEM_PROMPT = (
     "You are an expert board game player assisting me in a game of Stratego. "
-    "I'll give you the current state of the game and you will suggest my next move.\n"
-    "Provide some short reasoning about your next move, then enclose your final decision "
-    "in valid JSON with the key \"move\" and a value with the move you wish to take. "
-    "Make sure that you specify a valid move string (e.g. 'b2-c3')."
+    "I'll give you the current state of the game and you will suggest my next move.\n\n"
+    "Quick summary of the rules:\n"
+    "• Units can move one tile in each of the cardinal directions. Scouts ('2') can move multiple tiles as long as "
+    "there are no lakes or units in the intermediate tiles.\n"
+    "• A piece cannot move back and forth between the same two squares in three consecutive turns.\n"
+    "• Only one piece can be moved on a turn.\n"
+    "• Moving into a cell containing an enemy unit attacks that unit.\n"
+    "• Bombs ('B') and flags ('F') cannot be moved. Bombs beat all units except Miners ('3'), who defuse bombs.\n"
+    "• Spies ('S') defeat the Marshal ('10') only when attacking; otherwise they lose to any attacker.\n"
+    "• Higher rank wins (e.g. '7' beats '6'); on ties both pieces are removed (unless the aggressor‐advantage rule is "
+    "enabled, in which case the attacking piece wins on a tie).\n"
+    "• Capturing the opponent's flag ('F') wins the game. A player with no valid moves also loses.\n\n"
+    "Cell notation and move format:\n"
+    "Cells are labeled by file (a–j) and rank (1–10) and may contain:\n"
+    "  '.' empty, 'L' lake, 'B' bomb, 'F' flag, numbers '2'–'10' for units, 'S' spy, '?' hidden enemy.\n"
+    "Specify moves as 'b2-b3'. Scouts can move across clear paths (e.g., 'b2-b5') but cannot jump lakes or units.\n"
+    "Moves must land on empty ('.') or enemy ('?') cells only.\n\n"
+    "Provide a bit of reasoning for your next move, then enclose your final decision in valid JSON with the key "
+    "\"move\" and a value of the move string."
 )
 explanation_assistant_moves = "Here are the previous moves you made or attempted to make: \n"
 
@@ -50,6 +65,13 @@ def rollout_single(
     """
     chat_history: Dict[str, List[dict]] = {"0": [], "1": [], "2": []}
     game = Stratego(setup_p0, setup_p1, aggressor_advantage=True if game_number == 3 else False)
+
+    if game.aggressor_advantage:
+        system_prompt = SYSTEM_PROMPT + ("\nSince the Aggressor Advantage rule is enabled, when two units with the "
+                                         "same rank battle, the attacking piece wins. ")
+    else:
+        system_prompt = SYSTEM_PROMPT + ("\nSince the Aggressor Advantage rule is disabled, when two units with the "
+                                         "same rank battle, both are removed from the game. ")
 
     f.write(f"########## ROLLOUT {game_number} ##########\n\n")
     if verbose:
@@ -90,7 +112,7 @@ def rollout_single(
                 | ChatCompletionAssistantMessageParam
                 | ChatCompletionUserMessageParam
                 ] = [
-                ChatCompletionSystemMessageParam(role="system", content=SYSTEM_PROMPT)
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt)
             ]
 
             # if they *have* made any moves before, show them:
@@ -115,9 +137,9 @@ def rollout_single(
                 print("PROMPT: \n")
 
             # First, log the system prompt itself:
-            f.write(SYSTEM_PROMPT + "\n\n")
+            f.write(system_prompt + "\n\n")
             if verbose:
-                print(SYSTEM_PROMPT)
+                print(system_prompt)
                 print()
 
             if assistant_history:
