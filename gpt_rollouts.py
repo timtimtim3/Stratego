@@ -150,10 +150,10 @@ def rollout_single(
             chat_history[str(pid)].append({"role": "assistant", "content": text})
 
             # extract move
-            m = re.search(r'"move"\s*:\s*"([^"]+)"', text)
-            if not m:
+            match_move = re.search(r'"move"\s*:\s*"([^"]+)"', text)
+            if not match_move:
                 raise ValueError("No valid action found in response: " + text)
-            move = m.group(1)
+            move = match_move.group(1)
 
             # try playing
             try:
