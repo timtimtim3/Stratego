@@ -1,7 +1,6 @@
 import re
 import os
 import json  # Added for parsing JSON responses
-from collections import Counter  # Added for validating piece counts
 from typing import Dict, List, Optional, TextIO, Any
 from openai import OpenAI
 from openai.types.chat import (
@@ -9,14 +8,8 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
     ChatCompletionAssistantMessageParam,
 )
-# Assuming classes.py exists in the same directory and defines Stratego and GameplayError
-from classes import Stratego, GameplayError
+from classes import Stratego, GameplayError, REQUIRED_PIECES, EXPECTED_TOTAL_PIECES, BOARD_SETUP_ROWS, BOARD_SETUP_COLS
 
-# --- Constants ---
-REQUIRED_PIECES = {'10': 1, '9': 1, '8': 2, '7': 3, '6': 4, '5': 4, '4': 4, '3': 5, '2': 8, 'S': 1, 'F': 1, 'B': 6}
-EXPECTED_TOTAL_PIECES = sum(REQUIRED_PIECES.values())  # Should be 40
-BOARD_SETUP_ROWS = 4
-BOARD_SETUP_COLS = 10
 
 # load your key & org from the environment
 api_key = os.getenv("OPENAI_API_KEY")
@@ -28,16 +21,20 @@ You are an expert Stratego player assisting me in setting up the game board.
 Your task is to generate a valid initial board setup for one player.
 
 Rules for Setup:
-- The setup occupies the {BOARD_SETUP_ROWS} rows closest to the player's side of the board, each with {BOARD_SETUP_COLS} columns.
-- The following dictionary contains piece, count pairs, where the count specifies how many of that given piece are required. You must place exactly 'count' many of the corresponding 'piece', no more and no less: {REQUIRED_PIECES}.
+- The setup occupies the {BOARD_SETUP_ROWS} rows closest to the player's side of the board, each with 
+{BOARD_SETUP_COLS} columns.
+- The following dictionary contains piece, count pairs, where the count specifies how many of that given piece are 
+required. You must place exactly 'count' many of the corresponding 'piece', no more and no less: {REQUIRED_PIECES}.
 - Total pieces must be exactly {EXPECTED_TOTAL_PIECES}.
-- Represent pieces using their standard symbols: '10' (Marshal), '9' (General), '8' (Colonel), '7' (Major), '6' (Captain), '5' (Lieutenant), '4' (Sergeant), '3' (Miner), '2' (Scout), 'S' (Spy), 'B' (Bomb), 'F' (Flag).
+- Represent pieces using their standard symbols: '10' (Marshal), '9' (General), '8' (Colonel), '7' (Major), '6' 
+(Captain), '5' (Lieutenant), '4' (Sergeant), '3' (Miner), '2' (Scout), 'S' (Spy), 'B' (Bomb), 'F' (Flag).
 
 Output Format:
 Provide your response as a JSON object containing a single key "setup".
 The value associated with "setup" must be a list of {BOARD_SETUP_ROWS} lists.
 Each inner list must contain {BOARD_SETUP_COLS} strings, where each string is a valid piece symbol.
-The first list will be placed on row 4 of the board, the second list on row 3 of the board, the third list on row 2 of the board and the fourth list on row 1 of the board (the bottom).
+The first list will be placed on row 4 of the board, the second list on row 3 of the board, the third list on row 2 of 
+the board and the fourth list on row 1 of the board (the bottom).
 
 Example of desired JSON output format:
 {{
@@ -77,55 +74,8 @@ GAMEPLAY_SYSTEM_PROMPT = (
 explanation_assistant_moves = "Here are the previous moves you made or attempted to make: \n"
 
 
-# --- Helper Functions ---
-
-def validate_setup(setup: Any, player_id: int) -> Optional[str]:
-    """
-    Validates a generated setup based on dimensions and piece counts.
-    Returns an error message string if invalid, None otherwise.
-    """
-    if not isinstance(setup, list):
-        return f"Invalid setup format for Player {player_id}: Expected a list, got {type(setup).__name__}."
-
-    if len(setup) != BOARD_SETUP_ROWS:
-        return f"Invalid setup for Player {player_id}: Expected {BOARD_SETUP_ROWS} rows, got {len(setup)}."
-
-    if not all(isinstance(row, list) for row in setup):
-        return f"Invalid setup for Player {player_id}: All elements in the main list must be lists (rows)."
-
-    if not all(len(row) == BOARD_SETUP_COLS for row in setup):
-        return f"Invalid setup for Player {player_id}: Each row must have {BOARD_SETUP_COLS} columns."
-
-    # Flatten the list and count pieces
-    all_pieces = [piece for row in setup for piece in row]
-
-    if len(all_pieces) != EXPECTED_TOTAL_PIECES:
-        return f"Invalid setup for Player {player_id}: Expected {EXPECTED_TOTAL_PIECES} total pieces, got {len(all_pieces)}."
-
-    counts = Counter(all_pieces)
-    required_keys = set(REQUIRED_PIECES.keys())
-    actual_keys = set(counts.keys())
-
-    # Check for unexpected piece symbols
-    if not actual_keys.issubset(required_keys):
-        unexpected = actual_keys - required_keys
-        return f"Invalid setup for Player {player_id}: Found unexpected piece symbols: {sorted(list(unexpected))}."
-
-    # Check for missing piece symbols (that should be present)
-    if not required_keys.issubset(actual_keys):
-        missing = required_keys - actual_keys
-        return f"Invalid setup for Player {player_id}: Missing required piece symbols: {sorted(list(missing))}."
-
-    # Check counts for each piece type
-    for piece, required_count in REQUIRED_PIECES.items():
-        actual_count = counts.get(piece, 0)
-        if actual_count != required_count:
-            return f"Invalid setup for Player {player_id}: Incorrect count for piece '{piece}'. Expected {required_count}, got {actual_count}."
-
-    return None  # Validation passed
-
-
 def generate_setup(
+        game: Stratego,
         player_id: int,
         client: OpenAI,
         f: TextIO,
@@ -193,9 +143,8 @@ def generate_setup(
             if "setup" not in parsed_json:
                 raise ValueError("Missing 'setup' key in JSON response.")
             generated_setup = parsed_json["setup"]
-            validation_error = validate_setup(generated_setup, player_id)
-            if validation_error:
-                raise ValueError(validation_error)
+
+            game.setup_pieces(player_id, generated_setup)  # Raises GameplayError on invalid board
 
             success_msg = f"Successfully generated and validated setup for Player {player_id}.\n\n"
             f.write(success_msg)
@@ -204,10 +153,11 @@ def generate_setup(
             messages.append(ChatCompletionAssistantMessageParam(role="assistant", content=text))
             return generated_setup
 
-        except (json.JSONDecodeError, ValueError, AssertionError) as e:
+        except (json.JSONDecodeError, ValueError, AssertionError, GameplayError) as e:
             error_msg = (
                 f"Invalid setup received (Attempt {attempts}): {e}. "
-                "Please provide a valid setup in the specified JSON format with correct dimensions and piece counts.\n\n"
+                "Please provide a valid setup in the specified JSON format with correct dimensions and piece "
+                "counts.\n\n"
             )
             f.write(error_msg)
             if verbose:
@@ -225,8 +175,7 @@ def generate_setup(
 def rollout_single(
         game_number: int,
         f: TextIO,
-        setup_p0: List[List[str]],  # Added parameter
-        setup_p1: List[List[str]],  # Added parameter
+        game: Stratego,
         n_moves_per_player: Optional[int] = None,
         n_attempts_per_turn: Optional[int] = None,
         verbose: bool = False
@@ -238,22 +187,6 @@ def rollout_single(
     """
     chat_history: Dict[str, List[dict]] = {"0": [], "1": []}  # Removed "2" history key
 
-    # Use the generated setups passed as arguments
-    try:
-        game = Stratego(setup_p0, setup_p1,
-                        aggressor_advantage=True if game_number % 2 != 0 else False)  # Example: Odd games have advantage
-        if verbose:
-            print(f"Game {game_number} created. Aggressor advantage: {game.aggressor_advantage}")
-    except Exception as e:
-        error_msg = f"CRITICAL ERROR: Failed to initialize Stratego game {game_number} with provided setups. Error: {e}\n"
-        f.write(error_msg)
-        if verbose:
-            print(error_msg)
-        # Log the setups that caused the error
-        f.write(f"Setup P0 causing error:\n{json.dumps(setup_p0, indent=2)}\n")
-        f.write(f"Setup P1 causing error:\n{json.dumps(setup_p1, indent=2)}\n")
-        return  # Cannot continue this game
-
     # Determine system prompt based on rules for this game
     if game.aggressor_advantage:
         system_prompt = GAMEPLAY_SYSTEM_PROMPT + (
@@ -264,17 +197,10 @@ def rollout_single(
             "\nSince the Aggressor Advantage rule is disabled, when two units with the "
             "same rank battle, both are removed from the game. ")
 
-    f.write(f"########## ROLLOUT {game_number} ##########\n")
     f.write(f"Aggressor Advantage: {game.aggressor_advantage}\n\n")
-    f.write(f"Initial Setup Player 0:\n{json.dumps(setup_p0, indent=2)}\n\n")
-    f.write(f"Initial Setup Player 1:\n{json.dumps(setup_p1, indent=2)}\n\n")
 
     if verbose:
-        print(f"########## ROLLOUT {game_number} ##########")
         print(f"Aggressor Advantage: {game.aggressor_advantage}\n")
-        # Optional: print setups to console if verbose
-        # print(f"Initial Setup Player 0:\n{json.dumps(setup_p0, indent=2)}\n")
-        # print(f"Initial Setup Player 1:\n{json.dumps(setup_p1, indent=2)}\n")
 
     iteration = 0
     max_iterations = (n_moves_per_player * 2) if n_moves_per_player is not None else None
@@ -289,7 +215,8 @@ def rollout_single(
                 f"--- Game {game_number} | Player {pid}'s turn "
                 f"(move {iteration // 2 + 1}.{pid + 1}"  # More conventional move numbering (e.g., 1.1, 1.2, 2.1, 2.2)
                 + (
-                    f" - total turn {iteration + 1}/{max_iterations}" if max_iterations is not None else f" - total turn {iteration + 1}")
+                    f" - total turn {iteration + 1}/{max_iterations}" if max_iterations is not None else
+                    f" - total turn {iteration + 1}")
                 + ") ---\n"
         )
         f.write(header + "\n")
@@ -299,15 +226,6 @@ def rollout_single(
         attempts = 0
         while True:  # Retry loop for getting a valid move
             state_str = game.state(pid)
-
-            # gather all prior assistant messages for this player
-            assistant_history = [
-                # Ensure correct type hinting for messages
-                m for m in chat_history[str(pid)] if m["role"] == "assistant"
-            ]
-            user_history = [
-                m for m in chat_history[str(pid)] if m["role"] == "user"
-            ]
 
             # start building messages with the system prompt
             # Correct type hinting for the list
@@ -339,7 +257,8 @@ def rollout_single(
             # finally append the current-state prompt
             current_turn_messages.append(
                 ChatCompletionUserMessageParam(role="user",
-                                               content="Current board state:\n" + state_str + "\nWhat is your next move?")
+                                               content="Current board state:\n" + state_str +
+                                                       "\nWhat is your next move?")
             )
 
             f.write("PROMPT: \n")
@@ -387,7 +306,8 @@ def rollout_single(
             # Try extracting from JSON first
             try:
                 match_json = re.search(
-                    r'\{.*?\"move\"\s*:\s*\"([a-j][1-9]|a10|b10|c10|d10|e10|f10|g10|h10|i10|j10)-([a-j][1-9]|a10|b10|c10|d10|e10|f10|g10|h10|i10|j10)\".*?\}',
+                    r'\{.*?\"move\"\s*:\s*\"([a-j][1-9]|a10|b10|c10|d10|e10|f10|g10|h10|i10|j10)-([a-j]['
+                    r'1-9]|a10|b10|c10|d10|e10|f10|g10|h10|i10|j10)\".*?}',
                     text, re.DOTALL | re.IGNORECASE)
                 if match_json:
                     json_part = match_json.group(0)
@@ -411,7 +331,8 @@ def rollout_single(
 
             if not move:
                 attempts += 1
-                error_msg = f"Could not extract a valid move string (e.g., 'a1-a2') from the response (Attempt {attempts})"
+                error_msg = (f"Could not extract a valid move string (e.g., 'a1-a2') from the response "
+                             f"(Attempt {attempts})")
                 if n_attempts_per_turn is not None:
                     error_msg += f"/{n_attempts_per_turn}"
                 error_msg += "). Please provide the move in the specified JSON format."
@@ -498,7 +419,7 @@ def rollout_single(
 def main():
     # configure here
     n_moves_per_player = 5  # Max moves per player (e.g., 50), or None to play until game over
-    n_attempts_setup = 10  # Max attempts to get a valid setup from AI
+    n_attempts_setup = 5  # Max attempts to get a valid setup from AI
     n_attempts_per_turn = 3  # Max attempts for AI to provide a valid move, or None for unlimited retries
     n_games = 1  # Number of games to simulate
     verbose = True  # Print progress and prompts/responses to console
@@ -512,15 +433,20 @@ def main():
         return
 
     for i in range(1, n_games + 1):
+        game = Stratego(aggressor_advantage=True if i % 2 != 0 else False)
+
         start_msg = f"\n----- Starting Game {i} -----\n"
-        print(start_msg.strip())
         fname = f"rollout_{i}.log"
         with open(fname, "w", encoding="utf-8") as f:
+            f.write(f"########## ROLLOUT {i} ##########\n")
             f.write(start_msg)
+            if verbose:
+                print(f"########## ROLLOUT {i} ##########")
+                print(start_msg.strip())
 
             # --- Generate Setups ---
             print("Generating setup for Player 0...")
-            setup_p0 = generate_setup(0, client, f, n_attempts_setup, verbose)
+            setup_p0 = generate_setup(game, 0, client, f, n_attempts_setup, verbose)
             if setup_p0 is None:
                 abort_msg = f"ABORTED GAME {i}: Failed to generate setup for Player 0.\n"
                 print(abort_msg.strip())
@@ -528,7 +454,7 @@ def main():
                 continue
 
             print("Generating setup for Player 1...")
-            setup_p1 = generate_setup(1, client, f, n_attempts_setup, verbose)
+            setup_p1 = generate_setup(game, 1, client, f, n_attempts_setup, verbose)
             if setup_p1 is None:
                 abort_msg = f"ABORTED GAME {i}: Failed to generate setup for Player 1.\n"
                 print(abort_msg.strip())
@@ -542,8 +468,7 @@ def main():
             rollout_single(
                 game_number=i,
                 f=f,
-                setup_p0=setup_p0,  # Pass generated setup
-                setup_p1=setup_p1,  # Pass generated setup
+                game=game,
                 n_moves_per_player=n_moves_per_player,
                 n_attempts_per_turn=n_attempts_per_turn,
                 verbose=verbose

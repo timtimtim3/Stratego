@@ -1,8 +1,13 @@
-import itertools
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
 from typing import TypedDict, Optional, Tuple, cast
+
+
+REQUIRED_PIECES = {'10': 1, '9': 1, '8': 2, '7': 3, '6': 4, '5': 4, '4': 4, '3': 5, '2': 8, 'S': 1, 'F': 1, 'B': 6}
+EXPECTED_TOTAL_PIECES = sum(REQUIRED_PIECES.values())  # Should be 40
+BOARD_SETUP_ROWS = 4
+BOARD_SETUP_COLS = 10
 
 
 class GameplayError(Exception):
@@ -178,9 +183,9 @@ class Stratego(Game):
         """
         return 0, 1
 
-    def __init__(self, setup_p0: list[list[str]], setup_p1: list[list[str]], show_board_labels: bool = True,
-                 aggressor_advantage: bool = False, flip_board: bool = False, show_player_labels: bool = True,
-                 display_removed_pieces: bool = True, display_past_moves: bool = True):
+    def __init__(self, setup_p0: Optional[list[list[str]]] = None, setup_p1: Optional[list[list[str]]] = None,
+                 show_board_labels: bool = True, aggressor_advantage: bool = False, flip_board: bool = False,
+                 show_player_labels: bool = True, display_removed_pieces: bool = True, display_past_moves: bool = True):
         """
         Initialize a Stratego game instance.
 
@@ -225,16 +230,71 @@ class Stratego(Game):
 
         self._current_player = 0
 
-        # Place pieces for both players; raises GameplayError on invalid setup
-        self._setup_pieces(0, setup_p0)
-        self._setup_pieces(1, setup_p1)
+        if setup_p0 is not None:
+            # Place pieces for both players; raises GameplayError on invalid setup
+            self.setup_pieces(0, setup_p0)
 
-        # Seed the initial board snapshots for each perspective
-        for pid in (0, 1, None):
-            self.board_state_queues[pid].append(self._board_lines(pid, self.show_board_labels))
+        if setup_p1 is not None:
+            self.setup_pieces(1, setup_p1)
 
-    def _setup_pieces(self, player_id: int, setup: list[list[str]]) -> None:
+        # Only fill queues if board is fully setup already, otherwise it will fill queues in user call to setup_pieces
+        if setup_p0 is not None and setup_p1 is not None:
+            # Seed the initial board snapshots for each perspective
+            for pid in (0, 1, None):
+                self.board_state_queues[pid].append(self._board_lines(pid, self.show_board_labels))
+
+    @staticmethod
+    def _validate_setup(player_id: int, setup: list[list[str]]) -> Optional[str]:
         """
+        Validates a generated setup based on dimensions and piece counts.
+        Returns an error message string if invalid, None otherwise.
+        """
+        if not isinstance(setup, list):
+            return f"Invalid setup format for Player {player_id}: Expected a list, got {type(setup).__name__}."
+
+        if len(setup) != BOARD_SETUP_ROWS:
+            return f"Invalid setup for Player {player_id}: Expected {BOARD_SETUP_ROWS} rows, got {len(setup)}."
+
+        if not all(isinstance(row, list) for row in setup):
+            return f"Invalid setup for Player {player_id}: All elements in the main list must be lists (rows)."
+
+        if not all(len(row) == BOARD_SETUP_COLS for row in setup):
+            return f"Invalid setup for Player {player_id}: Each row must have {BOARD_SETUP_COLS} columns."
+
+        # Flatten the list and count pieces
+        all_pieces = [piece for row in setup for piece in row]
+
+        if len(all_pieces) != EXPECTED_TOTAL_PIECES:
+            return (f"Invalid setup for Player {player_id}: Expected {EXPECTED_TOTAL_PIECES} total pieces, got "
+                    f"{len(all_pieces)}.")
+
+        counts = Counter(all_pieces)
+        required_keys = set(REQUIRED_PIECES.keys())
+        actual_keys = set(counts.keys())
+
+        # Check for unexpected piece symbols
+        if not actual_keys.issubset(required_keys):
+            unexpected = actual_keys - required_keys
+            return f"Invalid setup for Player {player_id}: Found unexpected piece symbols: {sorted(list(unexpected))}."
+
+        # Check for missing piece symbols (that should be present)
+        if not required_keys.issubset(actual_keys):
+            missing = required_keys - actual_keys
+            return f"Invalid setup for Player {player_id}: Missing required piece symbols: {sorted(list(missing))}."
+
+        # Check counts for each piece type
+        for piece, required_count in REQUIRED_PIECES.items():
+            actual_count = counts.get(piece, 0)
+            if actual_count != required_count:
+                return (f"Invalid setup for Player {player_id}: Incorrect count for piece '{piece}'. Expected "
+                        f"{required_count}, got {actual_count}.")
+
+        return None  # Validation passed
+
+    def setup_pieces(self, player_id: int, setup: list[list[str]]) -> None:
+        """
+        setup: 4x10 grid of ranks for Player 0 (rows 6→9 on the board), Player 1 (rows 3→0, each row reversed).
+
         Place the 40-piece setup for player_id onto self.board.
         `setup` must be a list of 4 lists, each of length 10, containing ranks like
         '10','9','8',…,'2','S','B','F'.  For player 0 we lay them out on rows 6→9
@@ -244,24 +304,11 @@ class Stratego(Game):
         # 1) Basic validations
         if player_id not in self.valid_players:
             raise GameplayError(f"Invalid player_id {player_id!r}.")
-        if not (isinstance(setup, list) and len(setup) == 4 and all(
-                isinstance(r, list) and len(r) == 10 for r in setup)):
-            raise GameplayError("Setup must be a list of 4 lists, each of length 10.")
 
-        # 2) Flatten and count to ensure the setups contain exactly the amount of pieces of each kind expected in
-        # a Stratego game
-        flat = list(itertools.chain.from_iterable(setup))
-        counts = Counter(flat)
-        expected = {
-            '10': 1, '9': 1, '8': 2, '7': 3, '6': 4,
-            '5': 4, '4': 4, '3': 5, '2': 8, 'S': 1,
-            'F': 1, 'B': 6
-        }
-        if counts != expected:
-            raise GameplayError(
-                "Invalid piece counts: "
-                f"found {dict(counts)}, expected {expected}."
-            )
+        # 2) validate the input board
+        val_message = self._validate_setup(player_id, setup)
+        if val_message is not None:
+            raise GameplayError(val_message)
 
         # 3) Place pieces onto board
         for row_idx, row_setup in enumerate(setup):
@@ -278,6 +325,11 @@ class Stratego(Game):
                 cell = self.board[board_row][col_idx]
                 # Assuming cell.piece is None beforehand
                 cell.piece = Piece(owner=player_id, rank=rank)
+
+        # Seed the initial board snapshots for each perspective
+        for pid in (0, 1, None):
+            self.board_state_queues[pid] = []  # first empty queues on each call
+            self.board_state_queues[pid].append(self._board_lines(pid, self.show_board_labels))
 
     def _cell_to_indices(self, cell: str, player_id: int) -> tuple[int, int]:
         """

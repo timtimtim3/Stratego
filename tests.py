@@ -1,5 +1,5 @@
 import pytest
-from classes import Stratego, GameplayError
+from classes import Stratego, GameplayError, Piece
 
 # Example starting setups for end-to-end simulation
 setup_p0 = [
@@ -238,6 +238,37 @@ def test_game_end_by_no_moves_for_opponent():
     assert game.is_over(), "Game should end when opponent has no valid moves"
     scores = game.scores()
     assert scores == {0: 1.0, 1: 0.0}, f"Expected P0 win, got {scores}"
+
+
+# only test ranks where ties normally remove both or draw
+equal_ranks = ['S'] + [str(i) for i in range(10, 1, -1)] + ['2']
+
+
+@pytest.mark.parametrize("rank", equal_ranks)
+def test_aggressor_advantage_on_ties(rank):
+    # initialize with aggressor_advantage=True
+    game = Stratego(setup_p0, setup_p1, aggressor_advantage=True)
+
+    # clear everything except lakes
+    for r in range(10):
+        for c in range(10):
+            cell = game.board[r][c]
+            if not cell.is_lake:
+                cell.piece = None
+
+    # place attacker at e4 and defender of same rank at e5
+    r_att, c_att = game._cell_to_indices('e4', 0)
+    r_def, c_def = game._cell_to_indices('e5', 0)
+    game.board[r_att][c_att].piece = Piece(0, rank)
+    game.board[r_def][c_def].piece = Piece(1, rank)
+
+    # attacker moves and should win the tie
+    game.play('e4-e5', 0)
+
+    cell = game.board[r_def][c_def]
+    assert cell.piece is not None, f"Expected attacker to remain for {rank} vs {rank}"
+    assert cell.piece.owner == 0, f"Attacker should win tie for rank {rank}"
+    assert cell.piece.rank == rank, f"Piece rank should be unchanged ({rank})"
 
 
 if __name__ == '__main__':
